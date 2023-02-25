@@ -23,16 +23,16 @@ class ResBlock1(torch.nn.Module):
         self.h = h
         # 1st Conv - Dilated Conv :: (*, C, T) -> (*, C, T)
         self.convs1 = nn.ModuleList([
-            weight_norm(Conv1d(c_size, c_size, kernel_size, 1, dilation=dilation[0], padding=get_padding(kernel_size, dilation[0]))),
-            weight_norm(Conv1d(c_size, c_size, kernel_size, 1, dilation=dilation[1], padding=get_padding(kernel_size, dilation[1]))),
-            weight_norm(Conv1d(c_size, c_size, kernel_size, 1, dilation=dilation[2], padding=get_padding(kernel_size, dilation[2]))),
+            weight_norm(Conv1d(c_size, c_size, kernel_size, dilation=dilation[0], padding=get_padding(kernel_size, dilation[0]))),
+            weight_norm(Conv1d(c_size, c_size, kernel_size, dilation=dilation[1], padding=get_padding(kernel_size, dilation[1]))),
+            weight_norm(Conv1d(c_size, c_size, kernel_size, dilation=dilation[2], padding=get_padding(kernel_size, dilation[2]))),
         ])
         self.convs1.apply(init_weights)
         # 2nd Conv - No dilation Conv :: (*, C, T) -> (*, C, T)
         self.convs2 = nn.ModuleList([
-            weight_norm(Conv1d(c_size, c_size, kernel_size, 1, dilation=1, padding=get_padding(kernel_size, 1))),
-            weight_norm(Conv1d(c_size, c_size, kernel_size, 1, dilation=1, padding=get_padding(kernel_size, 1))),
-            weight_norm(Conv1d(c_size, c_size, kernel_size, 1, dilation=1, padding=get_padding(kernel_size, 1))),
+            weight_norm(Conv1d(c_size, c_size, kernel_size, padding=get_padding(kernel_size, 1))),
+            weight_norm(Conv1d(c_size, c_size, kernel_size, padding=get_padding(kernel_size, 1))),
+            weight_norm(Conv1d(c_size, c_size, kernel_size, padding=get_padding(kernel_size, 1))),
         ])
         self.convs2.apply(init_weights)
 
@@ -70,8 +70,8 @@ class ResBlock2(torch.nn.Module):
         self.h = h
         # Dilated Conv :: (*, C, T) -> (*, C, T)
         self.convs = nn.ModuleList([
-            weight_norm(Conv1d(c_size, c_size, kernel_size, 1, dilation=dilation[0], padding=get_padding(kernel_size, dilation[0]))),
-            weight_norm(Conv1d(c_size, c_size, kernel_size, 1, dilation=dilation[1], padding=get_padding(kernel_size, dilation[1]))),
+            weight_norm(Conv1d(c_size, c_size, kernel_size, dilation=dilation[0], padding=get_padding(kernel_size, dilation[0]))),
+            weight_norm(Conv1d(c_size, c_size, kernel_size, dilation=dilation[1], padding=get_padding(kernel_size, dilation[1]))),
         ])
         self.convs.apply(init_weights)
 
@@ -99,7 +99,7 @@ class Generator(torch.nn.Module):
         c_base = h.upsample_initial_channel
 
         # PreConv :: (*, C=80, T) -> (*, C=c, T)
-        self.conv_pre = weight_norm(Conv1d(80, c_base, 7, 1, padding=3))
+        self.conv_pre = weight_norm(Conv1d(80, c_base, 7, padding=3))
  
         # 'up-MRF' stack
         ## Up
@@ -119,7 +119,7 @@ class Generator(torch.nn.Module):
                 self.resblocks.append(resblock(h, ch, k, d))
 
         # PostConv :: (*, C=c, T) -> (*, C=1, T)
-        self.conv_post = weight_norm(Conv1d(ch, 1, 7, 1, padding=3))
+        self.conv_post = weight_norm(Conv1d(ch, 1, 7, padding=3))
         self.conv_post.apply(init_weights)
 
     def forward(self, x):
@@ -227,13 +227,14 @@ class DiscriminatorS(torch.nn.Module):
         super(DiscriminatorS, self).__init__()
         norm_f = weight_norm if use_spectral_norm == False else spectral_norm
         self.convs = nn.ModuleList([
-            norm_f(Conv1d(1, 128, 15, 1, padding=7)),
-            norm_f(Conv1d(128, 128, 41, 2, groups=4, padding=20)),
-            norm_f(Conv1d(128, 256, 41, 2, groups=16, padding=20)),
-            norm_f(Conv1d(256, 512, 41, 4, groups=16, padding=20)),
-            norm_f(Conv1d(512, 1024, 41, 4, groups=16, padding=20)),
+            #              c_i   c_o   k  s
+            norm_f(Conv1d(   1,  128, 15, 1,            padding= 7)),
+            norm_f(Conv1d( 128,  128, 41, 2, groups= 4, padding=20)),
+            norm_f(Conv1d( 128,  256, 41, 2, groups=16, padding=20)),
+            norm_f(Conv1d( 256,  512, 41, 4, groups=16, padding=20)),
+            norm_f(Conv1d( 512, 1024, 41, 4, groups=16, padding=20)),
             norm_f(Conv1d(1024, 1024, 41, 1, groups=16, padding=20)),
-            norm_f(Conv1d(1024, 1024, 5, 1, padding=2)),
+            norm_f(Conv1d(1024, 1024,  5, 1,            padding= 2)),
         ])
         self.conv_post = norm_f(Conv1d(1024, 1, 3, 1, padding=1))
 
