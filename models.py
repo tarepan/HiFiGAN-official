@@ -9,30 +9,37 @@ LRELU_SLOPE = 0.1
 
 
 class ResBlock1(torch.nn.Module):
-    def __init__(self, h, channels, kernel_size=3, dilation=(1, 3, 5)):
-        super(ResBlock1, self).__init__()
+    """
+    HiFi-GAN's big ResBlock (V1 or V2), which mix information time-locally without shape change.
+    Model structure is fixed to 2-Conv/res in 3-res/block.
+    Receptive field can be configured by kernel size and dilation size.
+    """
+    def __init__(self, h, c_size, kernel_size=3, dilation=(1, 3, 5)):
+        """
+        Args:
+            dilation :: Tuple[int] - Length is fixed to '3' because the big model is 3-res/block
+        """
+        super().__init__()
         self.h = h
+        # 1st Conv - Dilated Conv :: (*, C, T) -> (*, C, T)
         self.convs1 = nn.ModuleList([
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, dilation=dilation[0],
-                               padding=get_padding(kernel_size, dilation[0]))),
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, dilation=dilation[1],
-                               padding=get_padding(kernel_size, dilation[1]))),
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, dilation=dilation[2],
-                               padding=get_padding(kernel_size, dilation[2])))
+            weight_norm(Conv1d(c_size, c_size, kernel_size, 1, dilation=dilation[0], padding=get_padding(kernel_size, dilation[0]))),
+            weight_norm(Conv1d(c_size, c_size, kernel_size, 1, dilation=dilation[1], padding=get_padding(kernel_size, dilation[1]))),
+            weight_norm(Conv1d(c_size, c_size, kernel_size, 1, dilation=dilation[2], padding=get_padding(kernel_size, dilation[2]))),
         ])
         self.convs1.apply(init_weights)
-
+        # 2nd Conv - No dilation Conv :: (*, C, T) -> (*, C, T)
         self.convs2 = nn.ModuleList([
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, dilation=1,
-                               padding=get_padding(kernel_size, 1))),
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, dilation=1,
-                               padding=get_padding(kernel_size, 1))),
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, dilation=1,
-                               padding=get_padding(kernel_size, 1)))
+            weight_norm(Conv1d(c_size, c_size, kernel_size, 1, dilation=1, padding=get_padding(kernel_size, 1))),
+            weight_norm(Conv1d(c_size, c_size, kernel_size, 1, dilation=1, padding=get_padding(kernel_size, 1))),
+            weight_norm(Conv1d(c_size, c_size, kernel_size, 1, dilation=1, padding=get_padding(kernel_size, 1))),
         ])
         self.convs2.apply(init_weights)
 
     def forward(self, x):
+        """
+        :: (*, C=c, T=t) -> (*, C=c, T=?)
+        """
         for c1, c2 in zip(self.convs1, self.convs2):
             xt = F.leaky_relu(x, LRELU_SLOPE)
             xt = c1(xt)
@@ -49,14 +56,22 @@ class ResBlock1(torch.nn.Module):
 
 
 class ResBlock2(torch.nn.Module):
-    def __init__(self, h, channels, kernel_size=3, dilation=(1, 3)):
-        super(ResBlock2, self).__init__()
+    """
+    HiFi-GAN's small ResBlock (V3), which mix information time-locally without shape change.
+    Model structure is fixed to 1-Conv/res in 2-res/block.
+    Receptive field can be configured by kernel size and dilation size.
+    """
+    def __init__(self, h, c_size, kernel_size=3, dilation=(1, 3)):
+        """
+        Args:
+            dilation :: Tuple[int] - Length is fixed to '2' because the small model is 2-res/block
+        """
+        super().__init__()
         self.h = h
+        # Dilated Conv :: (*, C, T) -> (*, C, T)
         self.convs = nn.ModuleList([
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, dilation=dilation[0],
-                               padding=get_padding(kernel_size, dilation[0]))),
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, dilation=dilation[1],
-                               padding=get_padding(kernel_size, dilation[1])))
+            weight_norm(Conv1d(c_size, c_size, kernel_size, 1, dilation=dilation[0], padding=get_padding(kernel_size, dilation[0]))),
+            weight_norm(Conv1d(c_size, c_size, kernel_size, 1, dilation=dilation[1], padding=get_padding(kernel_size, dilation[1]))),
         ])
         self.convs.apply(init_weights)
 
@@ -76,39 +91,58 @@ class Generator(torch.nn.Module):
     def __init__(self, h):
         super(Generator, self).__init__()
         self.h = h
+        # The number of ResBlocks in a MRF (== variety of kernel size)
         self.num_kernels = len(h.resblock_kernel_sizes)
+        # The number of 'up-MRF' layers in a Generator
         self.num_upsamples = len(h.upsample_rates)
-        self.conv_pre = weight_norm(Conv1d(80, h.upsample_initial_channel, 7, 1, padding=3))
-        resblock = ResBlock1 if h.resblock == '1' else ResBlock2
+        # Channel size at base layer (after PreConv, before up-MRF stack)
+        c_base = h.upsample_initial_channel
 
+        # PreConv :: (*, C=80, T) -> (*, C=c, T)
+        self.conv_pre = weight_norm(Conv1d(80, c_base, 7, 1, padding=3))
+ 
+        # 'up-MRF' stack
+        ## Up
         self.ups = nn.ModuleList()
         for i, (u, k) in enumerate(zip(h.upsample_rates, h.upsample_kernel_sizes)):
-            self.ups.append(weight_norm(
-                ConvTranspose1d(h.upsample_initial_channel//(2**i), h.upsample_initial_channel//(2**(i+1)),
-                                k, u, padding=(k-u)//2)))
-
+            t_conv = ConvTranspose1d(c_base//(2**i), c_base//(2**(i+1)), k, u, padding=(k-u)//2)
+            self.ups.append(weight_norm(t_conv))
+        self.ups.apply(init_weights)
+        ## ResBlock
+        resblock = ResBlock1 if h.resblock == '1' else ResBlock2
         self.resblocks = nn.ModuleList()
         for i in range(len(self.ups)):
-            ch = h.upsample_initial_channel//(2**(i+1))
-            for j, (k, d) in enumerate(zip(h.resblock_kernel_sizes, h.resblock_dilation_sizes)):
+            # 'up-MRF' layer No.i
+            ## channel size changed by ConvT
+            ch = c_base//(2**(i+1))
+            for _, (k, d) in enumerate(zip(h.resblock_kernel_sizes, h.resblock_dilation_sizes)):
                 self.resblocks.append(resblock(h, ch, k, d))
 
+        # PostConv :: (*, C=c, T) -> (*, C=1, T)
         self.conv_post = weight_norm(Conv1d(ch, 1, 7, 1, padding=3))
-        self.ups.apply(init_weights)
         self.conv_post.apply(init_weights)
 
     def forward(self, x):
+        # PreConv
         x = self.conv_pre(x)
+
+        # 'up-MRF' stack
         for i in range(self.num_upsamples):
+            # 'up-MRF' layer No.i
+            ## Act & Up
             x = F.leaky_relu(x, LRELU_SLOPE)
             x = self.ups[i](x)
+            ## MRF
             xs = None
             for j in range(self.num_kernels):
+                # ResBlock
                 if xs is None:
-                    xs = self.resblocks[i*self.num_kernels+j](x)
+                    xs =  self.resblocks[i*self.num_kernels+j](x)
                 else:
                     xs += self.resblocks[i*self.num_kernels+j](x)
             x = xs / self.num_kernels
+
+        # PostConv
         x = F.leaky_relu(x)
         x = self.conv_post(x)
         x = torch.tanh(x)
