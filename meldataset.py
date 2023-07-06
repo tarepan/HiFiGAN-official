@@ -84,9 +84,14 @@ def get_dataset_filelist(a):
 
 
 class MelDataset(torch.utils.data.Dataset):
+    """Train/Val dataset."""
     def __init__(self, training_files, segment_size, n_fft, num_mels,
                  hop_size, win_size, sampling_rate,  fmin, fmax, split=True, shuffle=True, n_cache_reuse=1,
                  device=None, fmax_loss=None, fine_tuning=False, base_mels_path=None):
+        """
+        Args:
+            segment_size - Audio clipping length, used if `split` [sample]
+        """
         self.audio_files = training_files
         random.seed(1234)
         if shuffle:
@@ -132,9 +137,10 @@ class MelDataset(torch.utils.data.Dataset):
                 if audio.size(1) >= self.segment_size:
                     max_audio_start = audio.size(1) - self.segment_size
                     audio_start = random.randint(0, max_audio_start)
-                    audio = audio[:, audio_start:audio_start+self.segment_size]
+                    audio = audio[:, audio_start : audio_start + self.segment_size]
                 else:
                     audio = torch.nn.functional.pad(audio, (0, self.segment_size - audio.size(1)), 'constant')
+                # assert audio.shape[-1] == self.segment_size
 
             mel = mel_spectrogram(audio, self.n_fft, self.num_mels,
                                   self.sampling_rate, self.hop_size, self.win_size, self.fmin, self.fmax,
